@@ -77,6 +77,13 @@ class Camera(object):
         return out[0]
     
 
+
+def sfm_multipoint(c1, c2, guess, u_gcp):
+	outs = []
+	for g,u in zip(guess,u_gcp):
+		outs.append(sfm(c1,c2,g,u))
+	return outs
+	
 def sfm(c1, c2, guess, u_gcp):
     '''Estimates world coordinates of a given point in an
        image given their image coordinates and a guess at
