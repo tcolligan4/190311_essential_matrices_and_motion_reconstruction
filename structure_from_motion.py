@@ -1,8 +1,9 @@
-from camera_utils import Camera, sfm
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 import piexif
+from camera_utils import sfm
+from scipy.optimize import leastsq
 from glob import glob
 
 
@@ -60,42 +61,86 @@ def triangulate(P0,P1,x1,x2):
     u,s,vt = np.linalg.svd(A)
     return vt[-1]
 
+
+class Camera(object):
+
+    def __init__(self, cam_mat):
+        self.rot_mat = cam_mat[:, :3]
+        self.trans_vect = cam_mat[:, 3]
+        self.trans_vect = np.expand_dims(self.trans_vect, 1)
+
+    def predict(self, uv):
+        return np.hstack((self.rot_mat, self.trans_vect)) @ uv.T
+
+    def fit_func(self, x, trans_vect):
+        self.trans_vect = trans_vect
+        return self.predict(x)
+    
+    def err_func(self, trans_vect, uv, real_world_coords, fit_func, err):
+        out = fit_func(uv, trans_vect)
+        return real_world_coords - out
+
+    def estimate_pose(self, X_gcp, u_gcp):
+        err = np.ones(X_gcp.shape)
+        out = leastsq(self.err_func, self.trans_vect, args=(X_gcp, u_gcp, self.fit_func, err), full_output=1)
+        self.trans_vect = out[0]
+        return out[0]
+     
+
 if __name__ == '__main__':
 
     pth = 'pictures/helmet/'
     out = []
-    files = [f for f in glob(pth + "*.jpg")]
-    for i in range(7, 18):
-        f1 = pth + 'DSC039{0:02}.JPG'.format(i)
-        f2 = pth + 'DSC039{0:02}.JPG'.format(i+1)
-        # f1 = 'pens_0.jpg'
-        # f2 = 'pens_1.jpg'
-        i1 = cv2.imread(f1)
-        i2 = cv2.imread(f2)
-        # fig, ax = plt.subplots(ncols=2)
-        # ax[0].imshow(i1)
-        # ax[1].imshow(i2)
-        # plt.show()
-        u1, u2 = compute_sift_and_match(i1, i2)
-        x1, k_cam1 = u_to_x(u1, i1, f1)
-        x2, k_cam2 = u_to_x(u2, i2, f2)
-        E, inliers = cv2.findEssentialMat(x1[:,:2],x2[:,:2],np.eye(3),method=cv2.RANSAC,threshold=1e-3)
-        inliers = inliers.ravel().astype(bool)
-        n_in, R, t, _ = cv2.recoverPose(E, x1[inliers,:2], x2[inliers,:2])
-        P_1 = np.array([[1,0,0,0],
-                        [0,1,0,0],
-                        [0,0,1,0]])
-        P_2 = np.hstack((R,t))
-        P_1c = k_cam1 @ P_1
-        P_2c = k_cam2 @ P_2
-        
-        for xx1, xx2 in zip(u1[inliers, :2], u2[inliers, :2]):
-            a = triangulate(P_1c, P_2c, xx1, xx2)
-            out.append(a)
+    files = [f for f in glob(pth + "*.JPG")]
+    files = sorted(files)
+    i = 0
+    first = True
+    P_Nc = None
+    f1 = files[i] 
+    f2 = files[i+1] 
+    f3 = files[i+2]
+    i1 = cv2.imread(f1)
+    i2 = cv2.imread(f2)
+    i3 = cv2.imread(f3)
+    # First two image
+    u1, u2 = compute_sift_and_match(i1, i2)
+    x1, k_cam1 = u_to_x(u1, i1, f1)
+    x2, k_cam2 = u_to_x(u2, i2, f2)
+    E, inliers = cv2.findEssentialMat(x1[:,:2],x2[:,:2],np.eye(3),method=cv2.RANSAC,threshold=1e-3)
+    inliers = inliers.ravel().astype(bool)
+    n_in, R, t, _ = cv2.recoverPose(E, x1[inliers,:2], x2[inliers,:2])
+    P_1 = np.array([[1,0,0,0],
+                    [0,1,0,0],
+                    [0,0,1,0]])
+    P_2 = np.hstack((R,t))
+    P_1c = k_cam1 @ P_1
+    P_2c = k_cam2 @ P_2
+    # print(P_2c.shape)
+    # c2 = Camera(P_2c)
+    # x1_h = np.ones((x1.shape[0], x1.shape[1]+1))
+    # print(x1.shape)
+    # print(x1_h.shape)
+    # x1_h[:, :x1.shape[1]] = x1
+    # c2.predict(x1_h[inliers])
+    # for xx1, xx2 in zip(u1[inliers, :2], u2[inliers, :2]):
+    #     a = triangulate(P_1c, P_2c, xx1, xx2)
+    #     out.append(a)
 
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    for p in out:
-        ax.scatter(p[0] / p[3], p[1] / p[3], p[2] / p[3])
-    plt.show()
+    # Last two images
+    u2_p, u3 = compute_sift_and_match(i2, i3)
+    x2_p, k_cam2_p = u_to_x(u2_p, i2, f2)
+    x3, k_cam3 = u_to_x(u3, i3, f3)
+    E, inliers = cv2.findEssentialMat(x2_p[:,:2],x3[:,:2],np.eye(3),method=cv2.RANSAC,threshold=1e-3)
+    inliers = inliers.ravel().astype(bool)
+    n_in, R, t, _ = cv2.recoverPose(E, x2_p[inliers,:2], x3[inliers,:2])
+    P_2_p = np.array([[1,0,0,0],
+                    [0,1,0,0],
+                    [0,0,1,0]])
+    P_3 = np.hstack((R,t))
+    P_2_pc = k_cam2_p @ P_2_p
+    P_3c = k_cam3 @ P_3
+
+    print(P_2c.shape, P_3c.shape)
+
+    initial_pose_guess = P_2c @ P_3c.T
+    print(initial_pose_guess.shape)
